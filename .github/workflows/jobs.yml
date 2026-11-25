@@ -1,0 +1,74 @@
+name: Animation Jobs Bot
+
+on:
+  schedule:
+    # Каждые 15 минут. GitHub пропускает большинство срабатываний и
+    # реально заводит задание раз в 1-3 часа — для вакансий этого с
+    # запасом хватает: их появляется около трёх-четырёх в сутки.
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Только показать, что нашлось, ничего не публиковать"
+        type: boolean
+        default: false
+      force:
+        description: "Публиковать без пауз между постами"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: anim-jobs-bot
+  cancel-in-progress: true
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+
+    # Запуск короткий по устройству: прочитал, опубликовал, вышел.
+    # Самая долгая пачка (6 постов по 40 секунд) укладывается в 5 минут;
+    # 12 — жёсткий потолок на случай, если какой-то запрос подвиснет.
+    #
+    # Прошлый репозиторий GitHub отключил за то, что бот держал запуск
+    # живым шесть часов подряд: это считается использованием Actions как
+    # бесплатного сервера. Не поднимайте это значение.
+    timeout-minutes: 12
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install requests
+
+      - name: Configure git
+        run: |
+          git config user.name "anim-jobs-bot"
+          git config user.email "bot@users.noreply.github.com"
+
+      - name: Publish jobs
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          FORCE: ${{ inputs.force }}
+          GIT_AUTOSAVE: "1"
+        run: python bot.py
+
+      - name: Save bot memory
+        if: ${{ !cancelled() }}
+        run: |
+          git add posted.json
+          git diff --staged --quiet && exit 0
+          git commit -m "update posted jobs"
+          git pull --rebase --autostash
+          git push
